@@ -71,12 +71,34 @@
          (room@pos (getf this-room :l) x y checked-rooms)
          (room@pos (getf this-room :r) x y checked-rooms)))))
 
-(defun make-room (x y rooms-left last-room level)
-  ;; one less room to create, since this one has been created.
-  (decf rooms-left)
+(defun link-adjacent-rooms (room1 room2 door)
+  "room2 becomes the value of door 1, in room 1."
+  (setf (getf room1 door) room2))
 
-  (let ((this-room (list :x x :y y))
-        (doors '(:f :b :l :r)))
+(defun split-n-m-ways (n m)
+  "returns a list of length m which sums to n. The distrobution is random.
+m >= 1, n >= 0
+
+The algorithm for this is as follows:
+  - m-1 separators are generated, each on a range from 0 to n+1
+  - these separators are sorted smallest to largest
+  - add a separator at the beginning and end of the sequence, to ensure m ways
+    are generated
+  - the size way m_i is given by m_i - m_(i-1)"
+
+  ;; set initial value to n+1, because it will be passed to random in map
+  (let ((ms (make-list (1- m) :initial-element (1+ n))))
+    (map-into ms #'random ms)
+    (setf ms (sort ms #'<))
+    (setf ms (concatenate 'list '(0) ms (list n)))
+    (map 'list #'- (cdr ms) ms)))
+
+(defun make-room (x y rooms-left last-room level)
+  ;; dir-args are the arguments that will be called on this function in each
+  ;; sub-direction
+  (let ((this-room (list :x x :y y :f nil :b nil :l nil :r nil))
+        (dir-args '((:f) (:b) (:l) (:r))))
+
     ;; --CREATE THIS ROOM--
     ;; (setf (getf this-room :stairs) (spawn-stairs level))
 
@@ -85,126 +107,94 @@
 
     (setf (getf this-room :loot) (spawn-loot level))
 
+    ;; return from this function early if there aren't enough rooms left to make
+    ;; more.
+    (cond ((eql rooms-left 1)
+           (return-from make-room this-room))
+          ((<= rooms-left 0)
+           (return-from make-room nil)))
+
     ;; --CREATE SUB-ROOMS--
     ;;
-    ;; determine whether last room was l, r, b, or f
-    ;; set last-room to the respective room key, if there was a last room.
-    ;; creates a circular link to the last room.
-    ;;
-    (if last-room
-        (setf (getf this-room
-                    (cond ((> x (getf last-room :x)) :l)
-                          ((< x (getf last-room :x)) :r)
-                          ((> y (getf last-room :y)) :f)
-                          ((< y (getf last-room :y)) :b)))
-              (list (cons (car last-room)
-                          (cdr last-room)))))
+    ;; determine whether last room was l, r, b, or f, and set last room to it.
+    (link-adjacent-rooms this-room last-room
+                         (cond ((not last-room) nil) ; guard math against nil
+                               ((> x (getf last-room :x)) :l)
+                               ((< x (getf last-room :x)) :r)
+                               ((> y (getf last-room :y)) :f)
+                               ((< y (getf last-room :y)) :b)))
 
     ;; remove doors that lead to the last room
-    (setf doors (remove (get-properties this-room '(:l :r :f :b)) doors))
+    (setf dir-args
+          (remove (get-properties this-room '(:l :r :f :b)) dir-args :key 'car))
 
-    ;; distribute the rooms-left between the available rooms and then create new
-    ;; rooms.
-    ;;
-    ;; The arguments for the next call of this function are gradually being
-    ;; built up through an alist. This function will be called again once for
-    ;; every entry in the alist.
-    ;;
-    ;; the room tracker subtracts one from rooms-left because the current room
-    ;; counts toward the number for rooms created.
-    (let ((room-tracker (- rooms-left 1))
-          new-doors-alist)
-      (cond
-        ;; return this room if no rooms need to be created
-        ((= room-tracker 0) this-room)
+    ;; link adjacent rooms, and remove them from the arguments alist
+    (dolist (dir-arg dir-args nil)
+      (let* ((dir (car dir-arg))
+             (x (cond ((eql dir :l) (+ (getf this-room :x) -1))
+                      ((eql dir :r) (+ (getf this-room :x) 1))
+                      (t (getf this-room :x))))
+             (y (cond ((eql dir :f) (+ (getf this-room :y) 1))
+                      ((eql dir :b) (+ (getf this-room :y) -1))
+                      (t (getf this-room :y)))))
 
-        ;; there are no rooms left, then return nil.
-        ((< room-tracker 0) nil)
+        ;; if there is a room at x/y, then it will be linked into this-room at
+        ;; dir otherwise, that direction in this room will be nil
+        (link-adjacent-rooms this-room (room@pos this-room x y) dir)
 
-        ;; otherwise, add sub-rooms to fill rooms-left, and return this-room.
-        (t
-         ;; remove doors that lead to a pre-existing room.
-         ;; creates an alist which contains rooms which are avaible to create.
-         ;; every entry will have the x and y parameters set.
-         (dolist (dir doors nil)
-           (let ((x (cond ((eql dir :l) (+ (getf this-room :x) -1))
-                          ((eql dir :r) (+ (getf this-room :x) 1))
-                          (t (getf this-room :x))))
-                 (y (cond ((eql dir :f) (+ (getf this-room :y) 1))
-                          ((eql dir :b) (+ (getf this-room :y) -1))
-                          (t (getf this-room :y)))))
+        (if (getf this-room dir)
+            ;; if room@pos returned a room, delete this entry, so this direction
+            ;; isn't recursed into.
+            (setf dir-args
+                  (remove dir dir-args :key 'car))
 
-             (unless (room@pos this-room x y)
-               (setf new-doors-alist (push (cons dir (list x y))
-                                           new-doors-alist)))))
+            ;; otherwise, put x and y in the arguments list
+            (setf (cdr dir-arg) (list x y)))))
 
-         ;; determine how many subrooms each room will have. when calling this
-         ;; function, there should be at least 1 room. otherwise, no room would
-         ;; be created.
-         ;;
-         ;; after this map, all parameters will be in each alist element.
-         (setf new-doors-alist
-               (map
-                'list
-                (lambda (door)
-                  (let ((new-rooms (if (/= room-tracker 0)
-                                       (+ 1 (random room-tracker))
-                                       0)))
-                    (decf room-tracker new-rooms)
+    ;; add sub-rooms to dir-arguments
+    (map 'list #'(lambda (dir-arg n) (setf dir-arg
+                                      (nconc dir-arg (list n this-room level))))
+         ;; first argument of above lambda functions
+         dir-args
 
-                    ;; reconstruct the alist cell
-                    (list ) (cons (car door)
-                          (concatenate 'list
-                                       ;; x y
-                                       (cdr door)
-                                       ;; rooms-left last-room level
-                                       (list new-rooms this-room level)))))
+         ;; generate number of subrooms for each remaining door
+         (split-n-m-ways (1- rooms-left) (length dir-args)))
 
-                ;; mapping over new-doors-alist
-                new-doors-alist))
+    ;; recursively create subrooms, and link them to their respective doors.
+    (dolist (dir-arg dir-args this-room)
+     (link-adjacent-rooms this-room (apply #'make-room (cdr dir-arg))
+                          (car dir-arg)))))
 
-         ;; dish out remaining rooms to first element
-         ;; we are incrementing the third parameter, rooms-left.
-         (incf (third (cdr (first new-doors-alist))) room-tracker)
 
-         ;; call this function again with the arguments built up in each element
-         ;; of new-doors-alist. Link each new room with the appropriate door in
-         ;; this-room
-         ;;
-         ;; returns this-room
-         (dolist (door new-doors-alist this-room)
-           (setf (getf this-room (car door))
-                 (list (apply #'make-room (cdr door))))))))))
 
 (defun weapon-alist ()
-  '(("Longsword" . "Versatile and balanced sword with a straight double-edged blade.")
-    ("Warhammer" . "Heavy weapon with a large hammerhead on one side and a piercing spike on the other.")
-    ("Battleaxe" . "Powerful weapon featuring a broad, curved blade and a spiked or blunt poll.")
-    ("Dagger" . "Short, lightweight weapon ideal for quick and precise strikes.")
-    ("Mace" . "Blunt weapon with a heavy head, often spiked, designed to crush opponents.")
-    ("Greatsword" . "Massive two-handed sword with a long blade for devastating slashing attacks.")
-    ("Rapier" . "Slender and agile weapon with a sharp-pointed blade for thrusting attacks.")
-    ("Flail" . "Weapon consisting of a spiked ball attached to a handle by a chain.")
-    ("Morningstar" . "Club-like weapon with a spiked ball at the end, causing crushing and piercing damage.")
-    ("Halberd" . "Polearm with an axe-like blade and a spike, combining the features of an axe and a spear.")
-    ("Scimitar" . "Curved sword with a single-edged blade, known for its slashing attacks.")
-    ("Whip" . "Flexible weapon with a long, thin lash used for striking or entangling enemies.")
-    ("Glaive" . "Long polearm with a large blade on the end, ideal for sweeping attacks.")
-    ("Claymore" . "Massive two-handed sword with a double-edged blade, favored by heavy-hitting warriors.")
-    ("Spear" . "Long, thrusting weapon with a pointed blade on one end and a handle on the other.")
-    ("Trident" . "Three-pronged spear often associated with aquatic or sea-themed warriors.")
-    ("Katana" . "Traditional Japanese sword with a curved, single-edged blade, known for its precision and deadly cuts.")
-    ("Morning Glory" . "Blunt weapon with a spiked ball covered in sharp spikes, causing extensive damage.")
-    ("Throwing Axes" . "Lightweight axes designed for throwing at enemies from a distance.")
-    ("Nunchaku" . "Pair of wooden sticks connected by a chain or rope, known for quick and unpredictable strikes.")
-    ("Wakizashi" . "Shorter companion sword to the katana, used for close-quarters combat and as a backup weapon.")
-    ("Flamberge" . "Two-handed sword with a wavy, flame-like blade, causing disorientation and increased cutting potential.")
-    ("Pike" . "Long polearm with a pointed spearhead, commonly used by infantry formations for thrusting attacks.")
-    ("Sickle" . "Curved blade attached to a short handle, used for slashing and hooking attacks.")
-    ("Giant Hammer" . "Massive two-handed hammer capable of devastating blows, often used against armored opponents.")
-    ("Giant Club" . "Enormous wooden or metal club designed for brute force, causing immense damage.")))
+'(("Longsword" . "Versatile and balanced sword with a straight double-edged blade.")
+  ("Warhammer" . "Heavy weapon with a large hammerhead on one side and a piercing spike on the other.")
+  ("Battleaxe" . "Powerful weapon featuring a broad, curved blade and a spiked or blunt poll.")
+  ("Dagger" . "Short, lightweight weapon ideal for quick and precise strikes.")
+  ("Mace" . "Blunt weapon with a heavy head, often spiked, designed to crush opponents.")
+  ("Greatsword" . "Massive two-handed sword with a long blade for devastating slashing attacks.")
+  ("Rapier" . "Slender and agile weapon with a sharp-pointed blade for thrusting attacks.")
+  ("Flail" . "Weapon consisting of a spiked ball attached to a handle by a chain.")
+  ("Morningstar" . "Club-like weapon with a spiked ball at the end, causing crushing and piercing damage.")
+  ("Halberd" . "Polearm with an axe-like blade and a spike, combining the features of an axe and a spear.")
+  ("Scimitar" . "Curved sword with a single-edged blade, known for its slashing attacks.")
+  ("Whip" . "Flexible weapon with a long, thin lash used for striking or entangling enemies.")
+  ("Glaive" . "Long polearm with a large blade on the end, ideal for sweeping attacks.")
+  ("Claymore" . "Massive two-handed sword with a double-edged blade, favored by heavy-hitting warriors.")
+  ("Spear" . "Long, thrusting weapon with a pointed blade on one end and a handle on the other.")
+  ("Trident" . "Three-pronged spear often associated with aquatic or sea-themed warriors.")
+  ("Katana" . "Traditional Japanese sword with a curved, single-edged blade, known for its precision and deadly cuts.")
+  ("Morning Glory" . "Blunt weapon with a spiked ball covered in sharp spikes, causing extensive damage.")
+  ("Throwing Axes" . "Lightweight axes designed for throwing at enemies from a distance.")
+  ("Nunchaku" . "Pair of wooden sticks connected by a chain or rope, known for quick and unpredictable strikes.")
+  ("Wakizashi" . "Shorter companion sword to the katana, used for close-quarters combat and as a backup weapon.")
+  ("Flamberge" . "Two-handed sword with a wavy, flame-like blade, causing disorientation and increased cutting potential.")
+  ("Pike" . "Long polearm with a pointed spearhead, commonly used by infantry formations for thrusting attacks.")
+  ("Sickle" . "Curved blade attached to a short handle, used for slashing and hooking attacks.")
+  ("Giant Hammer" . "Massive two-handed hammer capable of devastating blows, often used against armored opponents.")
+  ("Giant Club" . "Enormous wooden or metal club designed for brute force, causing immense damage.")))
 
-(last )
 (defun id->weapon-name (id)
   (car (nth id (weapon-alist))))
 
