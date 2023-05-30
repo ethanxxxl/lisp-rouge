@@ -43,7 +43,7 @@
   (cond
     ;; return nil when the room doesn't exist, or if it has already been
     ;; checked
-    ((and (not this-room)
+    ((or (not this-room)
           (find (list (getf this-room :x) (getf this-room :y))
                 checked-rooms :test #'equal))
      nil)
@@ -93,29 +93,99 @@ The algorithm for this is as follows:
     (setf ms (concatenate 'list '(0) ms (list n)))
     (map 'list #'- (cdr ms) ms)))
 
+(defun flatten-rooms (room &optional return-list)
+  "returns a list of positions that contain rooms in the format of ((x y) (x y)
+...)"
+  (let ((pos (list (getf room :x) (getf room :y)))
+        (sym (gensym "NEW-ROOM")))
+    (cond
+      ;; condition that room is nil or already checked.
+      ((or (not room)
+           (find pos return-list :test #'equal))
+       nil)
+
+      ;; otherwise, append this rooms position to the return list, and then
+      ;; recursively append the positions of the sub-rooms
+      (t
+
+       (push pos return-list)
+
+       (sort
+        (append (list pos)
+                (flatten-rooms (getf room :f) return-list)
+                (flatten-rooms (getf room :b) return-list)
+                (flatten-rooms (getf room :l) return-list)
+                (flatten-rooms (getf room :r) return-list))
+        #'< :key 'car)))))
+
+(defun draw-points (points &optional character-pos)
+  (let* ((sorted-by-x (sort points #'< :key 'first))
+         (minx (first (first sorted-by-x)))
+         (maxx (first (first (last sorted-by-x))))
+         ;; note, sort destructively merges points.
+         (sorted-by-y (sort points #'< :key 'second))
+         (miny (second (first sorted-by-y)))
+         (maxy (second (first (last sorted-by-y))))
+
+         ;; each dimension is min-max + 1.
+         (map (loop repeat (- maxy miny -1)
+                    collect (make-list (- maxx minx -1) :initial-element #\#))))
+
+    (dolist (p points)
+      (let ((x (- (first p) minx))
+            (y (- (second p) miny)))
+        (setf (nth x (nth y map)) #\M)))
+
+    (when character-pos
+      (let ((x (- (first character-pos) minx))
+            (y (- (second character-pos) miny)))
+        (setf (nth x (nth y map)) #\@)))
+
+
+    ;; flip along x axis so that y's appear right direction when printed
+    (setf map (nreverse map))
+    (dolist (line map)
+      (format t "~A~%" line))))
+
+(defun draw-map (room &optional character)
+  (draw-points (flatten-rooms room) character))
+
+(defun print-room (room)
+  (format t "x,y: ~D,~D~%Loot: ~A~&F: ~A ~D~%B: ~A ~D~%L: ~A ~D~%R: ~A ~D~%"
+          (getf room :x)
+          (getf room :y)
+          (getf (getf room :loot) :name)
+          (when (getf room :f) t) (getf (getf room :f) :sub-rooms)
+          (when (getf room :b) t) (getf (getf room :b) :sub-rooms)
+          (when (getf room :l) t) (getf (getf room :l) :sub-rooms)
+          (when (getf room :r) t) (getf (getf room :r) :sub-rooms)))
+
+;; TODO fix problem with players getting stuck in rooms (calls where
+;; rooms-left=1 are probably the culprit)
 (defun make-room (x y rooms-left last-room level)
+  "creates a new room with rooms-leve - 1 sub rooms"
+  (declare (optimize debug))
   ;; dir-args are the arguments that will be called on this function in each
   ;; sub-direction
   (let ((this-room (list :x x :y y :f nil :b nil :l nil :r nil))
-        (dir-args '((:f) (:b) (:l) (:r))))
+        (dir-args (copy-tree '((:f) (:b) (:l) (:r)))))
 
+    ;;
     ;; --CREATE THIS ROOM--
+    ;;
+
     ;; (setf (getf this-room :stairs) (spawn-stairs level))
 
     ;; (setf (getf this-room :monster) (spawn-monster level
     ;;                                                (getf this-room :stairs)))
 
     (setf (getf this-room :loot) (spawn-loot level))
+    (setf (getf this-room :sub-rooms) (1- rooms-left))
 
-    ;; return from this function early if there aren't enough rooms left to make
-    ;; more.
-    (cond ((eql rooms-left 1)
-           (return-from make-room this-room))
-          ((<= rooms-left 0)
-           (return-from make-room nil)))
-
-    ;; --CREATE SUB-ROOMS--
     ;;
+    ;; --LINK ADJACENT ROOMS--
+    ;;
+
     ;; determine whether last room was l, r, b, or f, and set last room to it.
     (link-adjacent-rooms this-room last-room
                          (cond ((not last-room) nil) ; guard math against nil
@@ -124,10 +194,12 @@ The algorithm for this is as follows:
                                ((> y (getf last-room :y)) :f)
                                ((< y (getf last-room :y)) :b)))
 
+
     ;; remove doors that lead to the last room
     (setf dir-args
           (remove (get-properties this-room '(:l :r :f :b)) dir-args :key 'car))
 
+    ;; BUG for some reason, dir-arg and dir-args aren't being bound lexically
     ;; link adjacent rooms, and remove them from the arguments alist
     (dolist (dir-arg dir-args nil)
       (let* ((dir (car dir-arg))
@@ -151,6 +223,17 @@ The algorithm for this is as follows:
             ;; otherwise, put x and y in the arguments list
             (setf (cdr dir-arg) (list x y)))))
 
+    ;; return from this function early if there aren't enough rooms left to make
+    ;; more.
+    (cond ((eql rooms-left 1)
+           (return-from make-room this-room))
+          ((<= rooms-left 0)
+           (return-from make-room nil)))
+
+    ;;
+    ;; --CREATE SUB-ROOMS--
+    ;;
+
     ;; add sub-rooms to dir-arguments
     (map 'list #'(lambda (dir-arg n) (setf dir-arg
                                       (nconc dir-arg (list n this-room level))))
@@ -160,40 +243,58 @@ The algorithm for this is as follows:
          ;; generate number of subrooms for each remaining door
          (split-n-m-ways (1- rooms-left) (length dir-args)))
 
+    ;; (break "dir-args: ~S~%debug-test: ~S~%" dir-args debug-test)
+
     ;; recursively create subrooms, and link them to their respective doors.
     (dolist (dir-arg dir-args this-room)
-     (link-adjacent-rooms this-room (apply #'make-room (cdr dir-arg))
-                          (car dir-arg)))))
+      ;; (break "dir-args: ~S~%dir-arg: ~S~%debug-test: ~S~%" dir-args dir-arg debug-test)
 
+      ;; NOTE: dir-args is getting modified, because you are setting something to
+      ;; NIL whenever a room is given zero rooms.
+      ;;
+      ;; All elements are getting modified because link-adjacent-rooms is setting
+      ;; the element NIL in this-room to NIL
+      (link-adjacent-rooms this-room (apply #'make-room (cdr dir-arg))
+                           (car dir-arg)))))
+
+;; test function to figure out why SLY isn't showing me local variables defined
+;; in let
+(defun test-func (bob)
+  (declare (optimize debug))
+  (let ((x 4)
+        (y 10)
+        (z 40))
+    (break)
+    (+ bob x y z)))
 
 
 (defun weapon-alist ()
-'(("Longsword" . "Versatile and balanced sword with a straight double-edged blade.")
-  ("Warhammer" . "Heavy weapon with a large hammerhead on one side and a piercing spike on the other.")
-  ("Battleaxe" . "Powerful weapon featuring a broad, curved blade and a spiked or blunt poll.")
-  ("Dagger" . "Short, lightweight weapon ideal for quick and precise strikes.")
-  ("Mace" . "Blunt weapon with a heavy head, often spiked, designed to crush opponents.")
-  ("Greatsword" . "Massive two-handed sword with a long blade for devastating slashing attacks.")
-  ("Rapier" . "Slender and agile weapon with a sharp-pointed blade for thrusting attacks.")
-  ("Flail" . "Weapon consisting of a spiked ball attached to a handle by a chain.")
-  ("Morningstar" . "Club-like weapon with a spiked ball at the end, causing crushing and piercing damage.")
-  ("Halberd" . "Polearm with an axe-like blade and a spike, combining the features of an axe and a spear.")
-  ("Scimitar" . "Curved sword with a single-edged blade, known for its slashing attacks.")
-  ("Whip" . "Flexible weapon with a long, thin lash used for striking or entangling enemies.")
-  ("Glaive" . "Long polearm with a large blade on the end, ideal for sweeping attacks.")
-  ("Claymore" . "Massive two-handed sword with a double-edged blade, favored by heavy-hitting warriors.")
-  ("Spear" . "Long, thrusting weapon with a pointed blade on one end and a handle on the other.")
-  ("Trident" . "Three-pronged spear often associated with aquatic or sea-themed warriors.")
-  ("Katana" . "Traditional Japanese sword with a curved, single-edged blade, known for its precision and deadly cuts.")
-  ("Morning Glory" . "Blunt weapon with a spiked ball covered in sharp spikes, causing extensive damage.")
-  ("Throwing Axes" . "Lightweight axes designed for throwing at enemies from a distance.")
-  ("Nunchaku" . "Pair of wooden sticks connected by a chain or rope, known for quick and unpredictable strikes.")
-  ("Wakizashi" . "Shorter companion sword to the katana, used for close-quarters combat and as a backup weapon.")
-  ("Flamberge" . "Two-handed sword with a wavy, flame-like blade, causing disorientation and increased cutting potential.")
-  ("Pike" . "Long polearm with a pointed spearhead, commonly used by infantry formations for thrusting attacks.")
-  ("Sickle" . "Curved blade attached to a short handle, used for slashing and hooking attacks.")
-  ("Giant Hammer" . "Massive two-handed hammer capable of devastating blows, often used against armored opponents.")
-  ("Giant Club" . "Enormous wooden or metal club designed for brute force, causing immense damage.")))
+  '(("Longsword" . "Versatile and balanced sword with a straight double-edged blade.")
+    ("Warhammer" . "Heavy weapon with a large hammerhead on one side and a piercing spike on the other.")
+    ("Battleaxe" . "Powerful weapon featuring a broad, curved blade and a spiked or blunt poll.")
+    ("Dagger" . "Short, lightweight weapon ideal for quick and precise strikes.")
+    ("Mace" . "Blunt weapon with a heavy head, often spiked, designed to crush opponents.")
+    ("Greatsword" . "Massive two-handed sword with a long blade for devastating slashing attacks.")
+    ("Rapier" . "Slender and agile weapon with a sharp-pointed blade for thrusting attacks.")
+    ("Flail" . "Weapon consisting of a spiked ball attached to a handle by a chain.")
+    ("Morningstar" . "Club-like weapon with a spiked ball at the end, causing crushing and piercing damage.")
+    ("Halberd" . "Polearm with an axe-like blade and a spike, combining the features of an axe and a spear.")
+    ("Scimitar" . "Curved sword with a single-edged blade, known for its slashing attacks.")
+    ("Whip" . "Flexible weapon with a long, thin lash used for striking or entangling enemies.")
+    ("Glaive" . "Long polearm with a large blade on the end, ideal for sweeping attacks.")
+    ("Claymore" . "Massive two-handed sword with a double-edged blade, favored by heavy-hitting warriors.")
+    ("Spear" . "Long, thrusting weapon with a pointed blade on one end and a handle on the other.")
+    ("Trident" . "Three-pronged spear often associated with aquatic or sea-themed warriors.")
+    ("Katana" . "Traditional Japanese sword with a curved, single-edged blade, known for its precision and deadly cuts.")
+    ("Morning Glory" . "Blunt weapon with a spiked ball covered in sharp spikes, causing extensive damage.")
+    ("Throwing Axes" . "Lightweight axes designed for throwing at enemies from a distance.")
+    ("Nunchaku" . "Pair of wooden sticks connected by a chain or rope, known for quick and unpredictable strikes.")
+    ("Wakizashi" . "Shorter companion sword to the katana, used for close-quarters combat and as a backup weapon.")
+    ("Flamberge" . "Two-handed sword with a wavy, flame-like blade, causing disorientation and increased cutting potential.")
+    ("Pike" . "Long polearm with a pointed spearhead, commonly used by infantry formations for thrusting attacks.")
+    ("Sickle" . "Curved blade attached to a short handle, used for slashing and hooking attacks.")
+    ("Giant Hammer" . "Massive two-handed hammer capable of devastating blows, often used against armored opponents.")
+    ("Giant Club" . "Enormous wooden or metal club designed for brute force, causing immense damage.")))
 
 (defun id->weapon-name (id)
   (car (nth id (weapon-alist))))
