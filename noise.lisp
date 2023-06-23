@@ -79,24 +79,47 @@
                               (dot-grid-gradient x1 y1 x y state) sx)
                  sy)))
 
+;; this doesn't work because mutli-dimensional arrays aren't sequence types.
+;;
+;; TODO: create your own mapping function to map over a 2 dimensional array,
+;; or otherwise find another way to do this.
 (defun perlin-map (height width step &optional (state *random-state*))
-  (loop for y below height by step
-        collect (loop for x below width by step
-                      collect (perlin (float x) (float y) state))))
+  (let ((val-map (make-array (list (* height step) (* width step))))
+        ;; indexes for map iteration
+        (x 0.0)
+        (y 0.0))
+
+    (map '(array float (* *))
+         (lambda (row)
+           (prog1 (map 'float
+                       (lambda (val)
+                         (prog1 (perlin x y state)
+                           (incf x step)))
+                       row)
+             (incf y step)
+             (setf x 0.0)))
+         val-map)))
+
+;; apparently this doesn't work because multi-dimensional arrays aren't sequence
+;; types
+(format t "~&~S"
+        (let ((a (make-array '(5 2) :element-type 'float :initial-element 1.0)))
+          (map '(array float (5 2)) #'1+ a)))
 
 ;;; Bit Map Stuff
 ;;;
 ;;; Bitmap File Header
 ;;; DIB Header
 ;;; Pixel Array
-(defun bmp-create-header (bmp-data))
+(defun bmp-create-file-header (bmp-data))
+(defun bmp-create-DIB-header ())
+(defun bmp-create-pixel-array ())
 
 (defun perlin-bmp (height width step)
   (with-open-file (f "./perlin.bmp" :direction :output
                                     :if-exists :supersede
                                     :element-type 'unsigned-byte)
-    (write-sequence '(#\B #\M))
-    (close f)))
+    (write-sequence '(#\B #\M))))
 
 ;; test random gradient
 (defun random-gradient-test ()
