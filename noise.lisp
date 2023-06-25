@@ -79,6 +79,82 @@
                               (dot-grid-gradient x1 y1 x y state) sx)
                  sy)))
 
+(defun 1d-to-2d (index width)
+  "returns (x y) where x and y are the dimensions given by index"
+  (list (mod index width) (floor (/ index width))))
+
+(defun array-subscripts (a index)
+  "returns a list of subscripts for the element in `A' at `INDEX'. It is
+essentially the inverse of `ARRAY-ROW-MAJOR-INDEX'
+
+Subscripts are returned in row-major order. For example, if `A' has rank 3, then
+the output would be of the form (z y x), which is how `ARRAY-ROW-MAJOR-INDEX'
+takes it's input"
+  ;; Let's define the notation N(X) to describe a single dimension array of
+  ;; length X. An n dimensional array will be notated as
+  ;; N(X_1) * N(X_2) * ... * (X_n)
+  ;;
+  ;; Say that you have an array N(AB), that is, its size is defined by A*B.
+  ;; mapping N(AB) to N(A) * N(B) is simply:
+  ;;   x = k % B
+  ;;   y = k / B
+  ;;
+  ;; Where x and y are the subscripts, and k is the index. This funcion
+  ;; functionality is implemented in the 1d-to-2d function in this package.
+  ;;
+  ;; This function could then be used to map an array of any dimension. Say you
+  ;; have an array N(ABCDE), and you want to map it to N(A)*N(B)*N(C)*N(D)*N(E).
+  ;;
+  ;; You can apply 1d-to-2d on N(ABCDE), such that
+  ;;    x = k % BCDE
+  ;;    y = k / BCDE
+  ;;
+  ;; This maps N(ABCDE) to N(A) * N(BCDE), where y indexes into N(A), and x into
+  ;; N(BCDE). We can apply 1d-to20 on N(BCDE), using x as the index:
+  ;;    x1 = x % CDE
+  ;;    y1 = x / CDE
+  ;;
+  ;; Now we have the mapping N(ABCDE) to N(A) * N(B) * N(CDE). This process is
+  ;; repeated until the mapping is complete.
+  ;;
+  ;; It is worth noting that this function returns subscripts in row-major order
+  ;; (ex, for a 3d array: (z y x)). This is how other functions in lisp work
+  ;; with array subscripts and how multidimensional arrays in C are indexed.
+
+  (loop with s1 = index
+        ;; we want to apply 1d-to-2d once for every dimension.
+        for i from 1 to (array-rank a)
+
+        collect (let*
+                    ;; size of dimensions which havent been mapped yet
+                    ((dims (reduce #'* (array-dimensions a) :start i))
+                     ;; do the new mapping
+                     (val (1d-to-2d s1 dims)))
+
+                  (setf s1 (first val)) ; set the index for the next iteration
+                  (car (last val)))))   ; retun the subscript for this dimension
+
+(defun 2d-map (f a &optional include-index)
+  "Applies F to every element in A when rank of A is greater than 1
+
+returns an array of the same type as A. "
+
+  ;; you need to apply f to every element in A, returning an array of the
+  ;; results you need to create a new `results' array, which has the same type
+  ;; as `A' then, as you apply `F' to `A', you should apply the results to the
+  ;; same location in `results'
+
+  (let ((results (make-array (array-dimensions a)
+                             :element-type (array-element-type a))))
+    (loop for i below (array-total-size a)
+          do (setf (row-major-aref results i)
+                   (funcall f (row-major-aref a i))))
+    results))
+
+(let ((test (make-array '(3 3 3) :initial-element 1)))
+  (2d-map #'1+ test))
+ ; => #2A((2 2 2) (2 2 2) (2 2 2))
+
 ;; this doesn't work because mutli-dimensional arrays aren't sequence types.
 ;;
 ;; TODO: create your own mapping function to map over a 2 dimensional array,
@@ -89,6 +165,8 @@
         (x 0.0)
         (y 0.0))
 
+    ;; problem: you cannot map over a 2d array. only 1 d arrays.
+    ;; you need a function that will map over all the elements in a 2d array
     (map '(array float (* *))
          (lambda (row)
            (prog1 (map 'float
