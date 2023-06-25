@@ -159,28 +159,48 @@ additional parameter"
     (map-array (lambda (_ i)
                  (declare (ignore _))
                  (let* ((subscripts (array-subscripts val-map i))
-                        (x (float  (/ (first subscripts) width)))
+                        (x (float (/ (first subscripts) width)))
                         (y (float (/ (second subscripts) height))))
                    (perlin x y state)))
                val-map t)))
 
-;;; Bit Map Stuff
-;;;
-;;; Bitmap File Header
-;;; DIB Header
-;;; Pixel Array
-(defun bmp-create-file-header (bmp-data))
-(defun bmp-create-DIB-header ())
-(defun bmp-create-pixel-array ())
+(defun byte-list (bytes num)
+  "creates a list of bytes (little endian) from number. The list will be `BYTES'
+long"
+  (declare ((integer 0) bytes num))
+  ;; TODO: determine if num will fit into bytes
 
-(defun perlin-bmp (height width step)
-  (with-open-file (f "./perlin.bmp" :direction :output
-                                    :if-exists :supersede
-                                    :element-type 'unsigned-byte)
-    (write-sequence '(#\B #\M))))
+  (loop for i below bytes
+        collect (ldb (byte 8 (* 8 i)) num)))
 
-;; test random gradient
-(defun random-gradient-test ()
-  (let ((g (random-gradient)))
-    (sqrt (+ (^2 (vec2-x g))
-             (^2 (vec2-y g))))))
+(defun array-bmp (a path)
+  "writes the contents of array `A' to the file specified at `PATH' as a bitmap"
+  (declare (optimize (debug 3)))
+  (let* ((file-header-size 14)
+         (bmpcoreheader-size 12)
+         (data-array-size (* 8 (array-total-size a)))
+         (file-header (concatenate 'list
+                                   '(#x42 #x4D)
+                                   (byte-list 4 (+ file-header-size
+                                                   bmpcoreheader-size
+                                                   data-array-size))
+                                   '(#x00 #x00 #x00 #x00) ; reserved bytes
+                                   (byte-list 4 (+ file-header-size
+                                                   bmpcoreheader-size))))
+         (bmpcoreheader (concatenate 'list
+                                     (byte-list 4 bmpcoreheader-size)
+                                     (byte-list 2 (array-dimension a 0))
+                                     (byte-list 2 (array-dimension a 1))
+                                     (byte-list 2 1)
+                                     (byte-list 2 24))))
+    (with-open-file (f path :direction :output
+                                      :if-exists :supersede
+                                      :element-type 'unsigned-byte)
+      (write-sequence file-header f)
+      (write-sequence bmpcoreheader f)
+      (loop for i below (array-total-size a)
+            do (write-sequence (let* ((val (row-major-aref a i))
+                                      (uint (floor (abs (* 255 val)))))
+                                 (list uint uint uint))
+                               f))
+      (close f))))
