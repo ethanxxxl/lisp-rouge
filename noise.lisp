@@ -6,7 +6,7 @@
 ;;;; This package provides methods for generating random noise.
 
 (defpackage :xl-noise
-  :use :cl)
+  (:use :cl))
 
 (in-package :xl-noise)
 
@@ -134,55 +134,35 @@ takes it's input"
                   (setf s1 (first val)) ; set the index for the next iteration
                   (car (last val)))))   ; retun the subscript for this dimension
 
-(defun 2d-map (f a &optional include-index)
-  "Applies F to every element in A when rank of A is greater than 1
+(defun map-array (f a &optional include-index)
+  "Applies `F' to every element in `A' when rank of `A' is greater than 1. returns
+an array of the same type as `A'.
 
-returns an array of the same type as A. "
+if `INCLUDE-INDEX' is not nil, then `F' should take take the index as an
+additional parameter"
 
-  ;; you need to apply f to every element in A, returning an array of the
-  ;; results you need to create a new `results' array, which has the same type
-  ;; as `A' then, as you apply `F' to `A', you should apply the results to the
-  ;; same location in `results'
-
-  (let ((results (make-array (array-dimensions a)
-                             :element-type (array-element-type a))))
+  ;; `RESULTS' will have the same number of dimensions as `A', and is where the
+  ;; output of `F' will go.
+  (let ((results (make-array (array-dimensions a))))
+    ;; call `F' on each element of `A' making changes in `RESULTS'
     (loop for i below (array-total-size a)
           do (setf (row-major-aref results i)
-                   (funcall f (row-major-aref a i))))
+                   (funcall f (row-major-aref a i) (when include-index i))))
     results))
 
-(let ((test (make-array '(3 3 3) :initial-element 1)))
-  (2d-map #'1+ test))
- ; => #2A((2 2 2) (2 2 2) (2 2 2))
-
-;; this doesn't work because mutli-dimensional arrays aren't sequence types.
-;;
-;; TODO: create your own mapping function to map over a 2 dimensional array,
-;; or otherwise find another way to do this.
 (defun perlin-map (height width step &optional (state *random-state*))
-  (let ((val-map (make-array (list (* height step) (* width step))))
-        ;; indexes for map iteration
-        (x 0.0)
-        (y 0.0))
+  (declare ((integer 0) height width) ((float 0.0 1.0) step))
 
-    ;; problem: you cannot map over a 2d array. only 1 d arrays.
-    ;; you need a function that will map over all the elements in a 2d array
-    (map '(array float (* *))
-         (lambda (row)
-           (prog1 (map 'float
-                       (lambda (val)
-                         (prog1 (perlin x y state)
-                           (incf x step)))
-                       row)
-             (incf y step)
-             (setf x 0.0)))
-         val-map)))
-
-;; apparently this doesn't work because multi-dimensional arrays aren't sequence
-;; types
-(format t "~&~S"
-        (let ((a (make-array '(5 2) :element-type 'float :initial-element 1.0)))
-          (map '(array float (5 2)) #'1+ a)))
+  ;; create an array large enough to hold all perlin values.
+  (let ((val-map (make-array (list (round (/ height step))
+                                   (round (/ width step))))))
+    (map-array (lambda (_ i)
+                 (declare (ignore _))
+                 (let* ((subscripts (array-subscripts val-map i))
+                        (x (float  (/ (first subscripts) width)))
+                        (y (float (/ (second subscripts) height))))
+                   (perlin x y state)))
+               val-map t)))
 
 ;;; Bit Map Stuff
 ;;;
