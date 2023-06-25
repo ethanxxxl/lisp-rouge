@@ -196,11 +196,32 @@ long"
     (with-open-file (f path :direction :output
                                       :if-exists :supersede
                                       :element-type 'unsigned-byte)
+
       (write-sequence file-header f)
       (write-sequence bmpcoreheader f)
       (loop for i below (array-total-size a)
             do (write-sequence (let* ((val (row-major-aref a i))
-                                      (uint (floor (abs (* 255 val)))))
-                                 (list uint uint uint))
+                                      (uint (round (abs (* 255 val))))
+                                      (width (array-dimension a 0))
+                                      (padding (- 4 (mod (* 3 width) 4))))
+
+                                 (append
+                                  (list uint uint uint)
+
+                                  ;; add padding at end of line
+                                  (when (and (equal (second (array-subscripts a i))
+                                                    (1- width))
+                                             (/= padding 0))
+                                    (make-list padding :initial-element 0))))
                                f))
       (close f))))
+
+(defun color-test-array (s &optional vert)
+  (let ((results (make-array (list s s))))
+    (loop for i below (array-total-size results)
+          do (let* ((w (if vert
+                           (first (array-subscripts results i))
+                           (second (array-subscripts results i))))
+                    (val (float (/ w s))))
+               (setf (row-major-aref results i) val)))
+    results))
