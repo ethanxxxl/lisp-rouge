@@ -13,8 +13,9 @@
 (defun smoothstep (x)
   (cond ((< x 0) 0)
         ((> x 1) 1)
-        (t (- (* 3 (expt x 2))
-              (* 2 (expt x 3))))))
+        (t (+ (* 6 (expt x 5))
+              (* -15 (expt x 4))
+              (* 10 (expt x 3))))))
 
 (defun interpolate (a0 a1 w)
   (+ a0 (* (smoothstep w)
