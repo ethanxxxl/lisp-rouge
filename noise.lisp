@@ -10,44 +10,47 @@
 
 (in-package :xl-noise)
 
+(defun smoothstep (x)
+  (cond ((< x 0) 0)
+        ((> x 1) 1)
+        (t (- (* 3 (expt x 2))
+              (* 2 (expt x 3))))))
+
 (defun interpolate (a0 a1 w)
-  (+ (* (- a1 a0) w) a0))
+  (+ a0 (* (smoothstep w)
+           (- a1 a0))))
 
 (defstruct vec2 (:x 'integer) (:y 'integer))
 (defun ^2 (n) (expt n 2))
 
-(defun gradient-at (ix iy state)
+(defun gradient-at (ix iy state &optional (width-hint 100))
   "returns the gradient at ix and iy. State is not modified."
-  (declare ((integer 0) ix iy))
+  (declare (optimize (speed 3)) ((unsigned-byte 31) ix iy width-hint))
 
   ;; this algorithm creates copies of state for each axis. The random values in
   ;; each dimension are summed up, and added together. This is done to avoid
   ;; symetries occuring in cases where x + y are the same (or any other
   ;; mathematical operation between x and y).
-  (let* ((x-state (make-random-state state))
-         (y-state (make-random-state state))
-         (r
-           (+ (loop repeat ix
-                    sum (random 1.0 x-state))
-              (loop repeat iy
-                    sum (random 1.0 y-state)))))
+  (let* ((new-state (make-random-state state))
+         (r (loop repeat (+ (* iy width-hint) ix)
+                  sum (random 720 new-state))))
 
     (make-vec2 :x (cos r)
                :y (sin r))))
 
-(defun dot-grid-gradient (ix iy x y state)
+(defun dot-grid-gradient (ix iy x y state &optional width-hint)
   "Calculates the dot product between the gradient and the distance vector."
   (declare ((integer 0) ix iy) (float x y))
 
   (let ((dx (- x ix))                 ; calclate distance vector
         (dy (- y iy))                 ; |
-        (gradient (gradient-at ix iy state)))
+        (gradient (gradient-at ix iy state width-hint)))
 
     ;; calculate/return dot product between distance vector and gradient
     (+ (* dx (vec2-x gradient))
        (* dy (vec2-y gradient)))))
 
-(defun perlin (x y state)
+(defun perlin (x y state &optional width-hint)
   "determine noise at coordinates x, y"
   (declare (float x y))
   (let*
@@ -62,10 +65,10 @@
        (sy (- y y0)))
 
     ;; there are gradients at each of the four corners.
-    ;; x0,y0 ┌──────┐ x1, y0
+    ;; x0,y1 ┌──────┐ x1, y1
     ;;       │      │
     ;;       │      │
-    ;; x0,y1 └──────┘ x1, y1
+    ;; x0,y0 └──────┘ x1, y0
     ;; we are going to take the dot product of the gradient with the distance
     ;; vector formed by that corner and x,y
     ;;
@@ -73,15 +76,14 @@
     ;; top right product) and (interpolation of bottom left product and bottom
     ;; right product)
 
-    (interpolate (interpolate (dot-grid-gradient x0 y0 x y state)
-                              (dot-grid-gradient x1 y0 x y state) sx)
-                 (interpolate (dot-grid-gradient x0 y1 x y state)
-                              (dot-grid-gradient x1 y1 x y state) sx)
-                 sy)))
-
-(defun 1d-to-2d (index width)
-  "returns (x y) where x and y are the dimensions given by index"
-  (list (mod index width) (floor (/ index width))))
+    (+ 0.5
+       (* 0.5
+          (interpolate
+           (interpolate (dot-grid-gradient x0 y0 x y state width-hint)
+                        (dot-grid-gradient x1 y0 x y state width-hint) sx)
+           (interpolate (dot-grid-gradient x0 y1 x y state width-hint)
+                        (dot-grid-gradient x1 y1 x y state width-hint) sx)
+           sy)))))
 
 (defun perlin-map (height width step &optional (state *random-state*))
   (declare (fixnum height width) ((float 0.0 1.0) step)
@@ -93,10 +95,23 @@
     (map-array (lambda (_ i)
                  (declare (ignore _))
                  (let* ((subscripts (array-subscripts val-map i))
-                        (x (float (/ (first subscripts) width)))
-                        (y (float (/ (second subscripts) height))))
-                   (perlin x y state)))
+                        (x (float (* (first subscripts) step)))
+                        (y (float (* (second subscripts) step))))
+                   (perlin x y state width)))
                val-map t)))
+
+;; TODO: layers should only specify frequency and intensity. the size of the
+;; image should be determined automatically in a top level.
+;; FIXME: this is not complete
+(defun perlin-multi-map (layers &optional (state *random-state*))
+  (if (eql (length layers) 1)
+      (apply #'perlin-map (car layers) state)
+      (add-arrays (apply #'perlin-map (car layers) state)
+                  (perlin-multi-map (cdr layers) state))))
+
+(defun 1d-to-2d (index width)
+  "returns (x y) where x and y are the dimensions given by index"
+  (list (mod index width) (floor (/ index width))))
 
 (defun array-subscripts (a index)
   "returns a list of subscripts for the element in `A' at `INDEX'. It is
@@ -167,6 +182,13 @@ additional parameter"
                    (funcall f (row-major-aref a i) (when include-index i))))
     results))
 
+(defun add-arrays (f a1 a2)
+  (let ((results (make-array (array-dimensions a1))))
+    (loop for i below (array-total-size results)
+          do (setf (row-major-aref results i)
+                   (+ (row-major-aref a1 i) (row-major-aref a2 i))))
+    results))
+
 (defun byte-list (bytes num)
   "creates a list of bytes (little endian) from number. The list will be `BYTES'
 long"
@@ -207,9 +229,9 @@ If the file specified at `PATH' exists, it is superceded by the data in `A'"
                                      ;; header
                                      (byte-list 4 bmpcoreheader-size)
                                      ;; WIDTH
-                                     (byte-list 2 (array-dimension a 0))
-                                     ;; HEIGHT
                                      (byte-list 2 (array-dimension a 1))
+                                     ;; HEIGHT
+                                     (byte-list 2 (array-dimension a 0))
                                      ;; PLANES (should always be 1)
                                      (byte-list 2 1)
                                      ;; BITCOUNT, we are using 3 8 bit channels.
@@ -229,7 +251,7 @@ If the file specified at `PATH' exists, it is superceded by the data in `A'"
             ;; and may need padding at the end of every row.
             do (write-sequence
                 (let* ((val (row-major-aref a i))
-                       (width (array-dimension a 0))
+                       (width (array-dimension a 1))
                        ;; calculate number of padding bytes.
                        (padding (- 4 (mod (* 3 width) 4))))
 
