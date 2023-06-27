@@ -24,6 +24,51 @@
 (defstruct vec2 (:x 'integer) (:y 'integer))
 (defun ^2 (n) (expt n 2))
 
+(defstruct gradient-array
+  (:weight 'float)
+  (:data '(array float 2)))
+
+(defstruct perlin-array
+  ;; width of structure in pixels
+  (:height '(integer 0))
+  ;; height of structure in pixels
+  (:width '(integer 0))
+  (:frequency 'float)
+  (:gradients '(cons gradient-array))
+  (:data '(array float 3))
+  (:random-state 'random-state))
+
+(defun generate-gradients (weight dimensions &optional rand-state)
+  "Generates a gradient-array with the given weight and dimensions."
+  ;; create
+  )
+
+(defun array-fill (larger smaller subscript)
+  ;; i smaller is rank 1, then insert into larger at subscript
+  ;; if smaller rank > 1, call array-fill on the next element in smaller
+  )
+
+(defun array-inc-rank (&rest arrays)
+  (if (every (lambda (a)
+               (equal (array-dimensions a)
+                      (array-dimensions (first arrays))))
+             (cdr arrays))
+      (let ((dimensions (append (list (length arrays))
+                                (array-dimensions (first arrays)))))
+        (flet ((array-fill (larger smaller subscript)
+                 ;; if smaller is rank 1, then add it to larger at subscript
+                 ;; otherwise, call array-fill
+                 (if (> (array-rank) 1)
+                     (it )))))
+        ;; PROBLEM: you can't initialize new arrays with existing multidimensional
+        ;; arrays.
+        ;;
+        ;; You need to create a new multidimensional array, then for each
+        ;; dimension, add the previous array recursively, recursing until you
+        ;; are down to a single dimension
+        (make-array dimensions :initial-contents arrays))
+      nil))
+
 (defun gradient-at (ix iy state &optional (width-hint 100))
   "returns the gradient at ix and iy. State is not modified."
   (declare (optimize (speed 3)) ((unsigned-byte 31) ix iy width-hint))
