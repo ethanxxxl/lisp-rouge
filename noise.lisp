@@ -33,7 +33,6 @@
   (:height '(integer 0))
   ;; height of structure in pixels
   (:width '(integer 0))
-  (:frequency 'float)
   (:gradients '(cons gradient-array))
   (:data '(array float 3))
   (:random-state 'random-state))
@@ -44,6 +43,27 @@
    :weight weight
    :data (map-array (lambda (_) (declare (ignore _)) (random 1.0 rand-state))
                     (make-array dimensions :element-type 'float))))
+
+(defun perlin-array-crunch-numbers (perlin-array)
+  "returns a perlin array with the data filled out"
+  (flet ((crunch-nums-iter (gradients width height)
+           (if (second gradients)
+               (map-arrays #'+
+                           (rasterize-gradient (first gradients) width height)
+                           (crunch-numbers-iter (cdr gradients) width height))
+               (rasterize-gradient (first gradients) width height))))
+
+    (setf (perlin-array-data (copy-perlin-array perlin-array))
+          (crunch-nums-iter (perlin-array-gradients perlin-array)
+                            (perlin-array-width perlin-array)
+                            (perlin-array-height perlin-array)))))
+
+;; TODO convert the logic from previous iteration of noise to this function
+(defun rasterize-gradient (gradient-array width height)
+  )
+
+(defun perlin-array-add-gradient (perlin-array gradient)
+  "adds gradient to the gradients field in perlin-array.")
 
 (defun gradient-at (ix iy state &optional (width-hint 100))
   "returns the gradient at ix and iy. State is not modified."
@@ -206,11 +226,12 @@ additional parameter"
                              (when include-index (list i))))))
     results))
 
-(defun add-arrays (f a1 a2)
+(defun map-arrays (f a1 a2)
+  "applies f to a1 and a2. a1 and a2 must have the same dimensions"
   (let ((results (make-array (array-dimensions a1))))
     (loop for i below (array-total-size results)
           do (setf (row-major-aref results i)
-                   (+ (row-major-aref a1 i) (row-major-aref a2 i))))
+                   (funcall f (row-major-aref a1 i) (row-major-aref a2 i))))
     results))
 
 (defun byte-list (bytes num)
