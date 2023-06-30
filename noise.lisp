@@ -38,36 +38,12 @@
   (:data '(array float 3))
   (:random-state 'random-state))
 
-(defun generate-gradients (weight dimensions &optional rand-state)
+(defun generate-gradients (weight dimensions &optional (rand-state *random-state*))
   "Generates a gradient-array with the given weight and dimensions."
-  ;; create
-  )
-
-(defun array-fill (larger smaller subscript)
-  ;; i smaller is rank 1, then insert into larger at subscript
-  ;; if smaller rank > 1, call array-fill on the next element in smaller
-  )
-
-(defun array-inc-rank (&rest arrays)
-  (if (every (lambda (a)
-               (equal (array-dimensions a)
-                      (array-dimensions (first arrays))))
-             (cdr arrays))
-      (let ((dimensions (append (list (length arrays))
-                                (array-dimensions (first arrays)))))
-        (flet ((array-fill (larger smaller subscript)
-                 ;; if smaller is rank 1, then add it to larger at subscript
-                 ;; otherwise, call array-fill
-                 (if (> (array-rank) 1)
-                     (it )))))
-        ;; PROBLEM: you can't initialize new arrays with existing multidimensional
-        ;; arrays.
-        ;;
-        ;; You need to create a new multidimensional array, then for each
-        ;; dimension, add the previous array recursively, recursing until you
-        ;; are down to a single dimension
-        (make-array dimensions :initial-contents arrays))
-      nil))
+  (make-gradient-array
+   :weight weight
+   :data (map-array (lambda (_) (declare (ignore _)) (random 1.0 rand-state))
+                    (make-array dimensions :element-type 'float))))
 
 (defun gradient-at (ix iy state &optional (width-hint 100))
   "returns the gradient at ix and iy. State is not modified."
@@ -225,7 +201,9 @@ additional parameter"
     ;; call `F' on each element of `A' making changes in `RESULTS'
     (loop for i below (array-total-size a)
           do (setf (row-major-aref results i)
-                   (funcall f (row-major-aref a i) (when include-index i))))
+                   (apply f (append
+                             (list (row-major-aref a i))
+                             (when include-index (list i))))))
     results))
 
 (defun add-arrays (f a1 a2)
