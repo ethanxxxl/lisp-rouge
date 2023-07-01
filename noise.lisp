@@ -21,20 +21,20 @@
   (+ a0 (* (smoothstep w)
            (- a1 a0))))
 
-(defstruct vec2 (:x 'integer) (:y 'integer))
 (defun ^2 (n) (expt n 2))
 
 (defstruct gradient-array
   (:weight 'float)
   (:data '(array float 2)))
 
-(defstruct perlin-array
+(defstruct perlin
   ;; width of structure in pixels
   (:height '(integer 0))
   ;; height of structure in pixels
   (:width '(integer 0))
   (:gradients '(cons gradient-array))
-  (:data '(array float 3))
+  ;; every vector must be the same length
+  (:data '(array vector))
   (:random-state 'random-state))
 
 (defun generate-gradients (weight dimensions &optional (rand-state *random-state*))
@@ -44,7 +44,7 @@
    :data (map-array (lambda (_) (declare (ignore _)) (random 1.0 rand-state))
                     (make-array dimensions :element-type 'float))))
 
-(defun perlin-array-crunch-numbers (perlin-array)
+(defun perlin-crunch-numbers (perlin)
   "returns a perlin array with the data filled out"
   (flet ((crunch-nums-iter (gradients width height)
            (if (second gradients)
@@ -53,39 +53,76 @@
                            (crunch-numbers-iter (cdr gradients) width height))
                (rasterize-gradient (first gradients) width height))))
 
-    (setf (perlin-array-data (copy-perlin-array perlin-array))
-          (crunch-nums-iter (perlin-array-gradients perlin-array)
-                            (perlin-array-width perlin-array)
-                            (perlin-array-height perlin-array)))))
+    (setf (perlin-data (copy-perlin perlin))
+          (crunch-nums-iter (perlin-gradients perlin)
+                            (perlin-width perlin)
+                            (perlin-height perlin)))))
+
+(defun perlin-add-gradient (perlin gradient)
+  "adds gradient to the gradients field in perlin.")
 
 ;; TODO convert the logic from previous iteration of noise to this function
-(defun rasterize-gradient (gradient-array width height)
+(defun compute-gradient (gradient-array dimensions)
+  "returns an array of RGB values, dimensions large.
+
+In most cases, the returned array will have a rank of 2, and dimensions will be
+of the form (height width), but higher dimensionality is also supported"
+  (let ((result (make-array dimensions :element-type '(vector float 3))))
+    ;; find the pixel value of the perlin noise at every index
+    (map-array (lambda (_ i) (pixel-perlin gradient-array
+                                      dimensions
+                                      (array-subscripts results i)))
+               results
+               t)))
+
+(defun vec-dot (v1 v2)
+  "takes the dot product of v1 and v2. Assumes both vectors begin at the origin"
+  (reduce #'+ (map 'vector #'* v1 v2)))
+
+(defun pixel-perlin (gradient dimensions pixel-location)
+  "returns the value of the 'pixel' located at `PIXEL-LOCATION'. `PIXEL-LOCATION'
+is an list of array subscripts. Its length must match the rank of gradient.
+`DIMENSIONS' is a list contaiing the dimensions of the pixel map being
+generated. The rank of dimensions must match the rank of gradient."
+  ;; you want to return the interpolated value of the dot product between the vector from each gradient
+  ;; at the "corner" of each "cell" and the gradient at those corners.
+
+  ;; first you have to find the corners of the higher dimensional cell.
+  ;; they are just every permutation of (floor Dn) and (1+ (floor Dn)) for each dimension.
+
   )
 
-(defun perlin-array-add-gradient (perlin-array gradient)
-  "adds gradient to the gradients field in perlin-array.")
+(defun get-cell-corners (coords)
+  "returns a list of coords for the corners of the cell that enclose the
+given coorinates."
+  (declare (optimize (debug 3)))
 
-(defun gradient-at (ix iy state &optional (width-hint 100))
-  "returns the gradient at ix and iy. State is not modified."
-  (declare (optimize (speed 3)) ((unsigned-byte 31) ix iy width-hint))
+  ;; the number of corners for a n-dimensional cube is 2^n.
+  ;; for every dimension d there will be a d + 1
+  ;; for dim 0, create a list with the floor and the floor +1
+  ;; then, copy the list, and add dim1 and dim1 + 1 to every other dimension.
+  (labels ((map-append (tree item)
+             "appends item to the end of every sublist in list"
+             (mapcar (lambda (l) (append l (list item))) tree))
+           (d0 (f) (floor (first f)))
+           (d1 (f) (1+ (floor (first f))))
+           (recurse (coords result)
+             "recursively constructs a list of all corners in the cell specified by coords"
+             (if coords
+                 (recurse (cdr coords)
+                          (append (map-append result (d0 coords))
+                                  (map-append result (d1 coords))))
+                 result)))
 
-  ;; this algorithm creates copies of state for each axis. The random values in
-  ;; each dimension are summed up, and added together. This is done to avoid
-  ;; symetries occuring in cases where x + y are the same (or any other
-  ;; mathematical operation between x and y).
-  (let* ((new-state (make-random-state state))
-         (r (loop repeat (+ (* iy width-hint) ix)
-                  sum (random 720 new-state))))
-
-    (make-vec2 :x (cos r)
-               :y (sin r))))
+    ;; call the recursive function with an initial condition
+    (recurse (cdr coords) (list (list  (d0 coords)) (list (d1 coords))))))
 
 (defun dot-grid-gradient (ix iy x y state &optional width-hint)
   "Calculates the dot product between the gradient and the distance vector."
   (declare ((integer 0) ix iy) (float x y))
 
-  (let ((dx (- x ix))                 ; calclate distance vector
-        (dy (- y iy))                 ; |
+  (let ((dx (- x ix))                   ; calclate distance vector
+        (dy (- y iy))                   ; |
         (gradient (gradient-at ix iy state width-hint)))
 
     ;; calculate/return dot product between distance vector and gradient
