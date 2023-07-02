@@ -37,11 +37,19 @@
   (:data '(array vector))
   (:random-state 'random-state))
 
+(defun make-unit-vec (vec)
+  (let ((len (sqrt (reduce #'+ (map 'vector (lambda (n) (expt n 2)) vec)))))
+    (map 'vector (lambda (d) (/ d len)) vec)))
+
 (defun generate-gradients (weight dimensions &optional (rand-state *random-state*))
   "Generates a gradient-array with the given weight and dimensions."
   (make-gradient-array
    :weight weight
-   :data (map-array (lambda (_) (declare (ignore _)) (random 1.0 rand-state))
+   :data (map-array (lambda (_) (declare (ignore _))
+                      (make-unit-vec (map 'vector
+                                          (lambda (_) (declare (ignore _))
+                                            (1- (random 2.0 rand-state)))
+                                          (make-array (length dimensions)))))
                     (make-array dimensions :element-type 'float))))
 
 (defun perlin-crunch-numbers (perlin)
@@ -62,39 +70,109 @@
   "adds gradient to the gradients field in perlin.")
 
 ;; TODO convert the logic from previous iteration of noise to this function
-(defun compute-gradient (gradient-array dimensions)
+(defun compute-gradient (gradients dimensions)
   "returns an array of RGB values, dimensions large.
 
 In most cases, the returned array will have a rank of 2, and dimensions will be
 of the form (height width), but higher dimensionality is also supported"
   (let ((result (make-array dimensions :element-type '(vector float 3))))
     ;; find the pixel value of the perlin noise at every index
-    (map-array (lambda (_ i) (pixel-perlin gradient-array
+    (map-array (lambda (_ i) (pixel-perlin gradients
                                       dimensions
-                                      (array-subscripts results i)))
-               results
+                                      (array-subscripts result i)))
+               result
                t)))
 
 (defun vec-dot (v1 v2)
   "takes the dot product of v1 and v2. Assumes both vectors begin at the origin"
   (reduce #'+ (map 'vector #'* v1 v2)))
 
-(defun pixel-perlin (gradient dimensions pixel-location)
+(defun pixel-perlin (gradients dimensions pixel-location)
   "returns the value of the 'pixel' located at `PIXEL-LOCATION'. `PIXEL-LOCATION'
 is an list of array subscripts. Its length must match the rank of gradient.
 `DIMENSIONS' is a list contaiing the dimensions of the pixel map being
-generated. The rank of dimensions must match the rank of gradient."
+generated. The rank of dimensions must match the rank of gradient.
+
+`GRADIENTS' is an array of unit vectors which represent gradients"
   ;; you want to return the interpolated value of the dot product between the vector from each gradient
   ;; at the "corner" of each "cell" and the gradient at those corners.
 
   ;; first you have to find the corners of the higher dimensional cell.
   ;; they are just every permutation of (floor Dn) and (1+ (floor Dn)) for each dimension.
 
-  )
+  ;; you need to interpolate between each pair of values in a dimension.
+  ;; get-cell-corners works by doubling each coordinate for every dimension,
+  ;; essentially, you want to do the opposite for interpolating.
+  ;;
+  ;; for example, you want to interpolate between x0 and x1 in all dimensions,
+  ;; then the results of those interpolations are interpolated between y0 and y1
+  ;; in all dimensions, etc.
+  ;;
+  ;; because of the output of get-cell-corners, you can interpolate between the
+  ;; coordinates in sets of two, essentially dividing the length of the
+  ;; coordinates list by two recursively until it is equal to one.
+  (declare (optimize (debug 3)))
+  (let* ((f-pos (pixel-to-gradient-space
+                 (array-dimensions gradients)
+                 dimensions
+                 pixel-location))
+         (cell-corners (get-cell-corners f-pos)))
+
+    (clamp 0.0 1.0 (+ 0.5 (* 0.5
+                           (r-interp f-pos
+                                     (loop for g in cell-corners
+                                           collect (vec-dot (apply #'aref gradients g) ;lookup gradient
+                                                            (map 'vector #'- f-pos g)))
+                                     cell-corners))))))
+
+(defun clamp (lower upper n)
+  (max lower (min upper n)))
+
+(defun pixel-to-gradient-space (gradient-dims px-map-dims pos)
+  (mapcar (lambda (px g p) (* (/ (1- g) px) p)) px-map-dims gradient-dims pos))
+
+(defun r-interp (pos values coords)
+  "recursive function to find the interpolated value at pos from values located at coords."
+  (if (eql 1 (length values))
+      (car values)
+      (r-interp
+       (cdr pos)
+       (loop for a0 in values by #'cddr
+             for p0 in coords by #'cddr
+             for a1 in (cdr values) by #'cddr
+             for p1 in (cdr coords) by #'cddr
+             collect (interpolate a0 a1 (- (first pos) (first p0))))
+
+       ;; take all but the first dimension of every other coordinate
+       (loop for p in coords by #'cddr
+             collect (cdr p)))))
+
+;; test code
+(defun gradient-test (freq h w filename)
+  (array-bmp (compute-gradient
+              (gradient-array-data
+               (generate-gradients 1.0 (list freq
+                                             (floor (* freq (/ w h))))))
+              (list h w))
+             filename))
+
 
 (defun get-cell-corners (coords)
   "returns a list of coords for the corners of the cell that enclose the
-given coorinates."
+given coorinates.
+
+due to the way this algorithm works, the coordinates will be reliably be grouped
+acording to their lowest dimension. For example, a 3 dimensional input will
+return the cell corners in the following format:
+  ((z0 y0 x0)
+   (z1 y0 x0)
+   (z0 y1 x0)
+   (z1 y1 x0)
+   (z0 y0 x1)
+   (z1 y0 x1)
+   (z0 y1 x1)
+   (z1 y1 x1))
+"
   (declare (optimize (debug 3)))
 
   ;; the number of corners for a n-dimensional cube is 2^n.
